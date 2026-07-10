@@ -1,0 +1,25 @@
+# Owns: package-level factory functions that wire config → concrete adapters.
+# Must not: contain domain logic or database calls.
+# May import: warehouse_app.config, warehouse_app.adapters.*.
+
+from __future__ import annotations
+
+from warehouse_app.config import Config
+
+
+def make_source(cfg: Config):
+    """Return the source adapter matching SOURCE_TYPE."""
+    if cfg.source_type == "fake":
+        from warehouse_app.adapters.source.fake_source import FakeSource
+        return FakeSource()
+    from warehouse_app.adapters.source.http_source import HttpSource
+    return HttpSource(cfg)
+
+
+def make_sink(cfg: Config):
+    """Return the sink adapter matching SINK_TYPE."""
+    if cfg.sink_type == "null":
+        from warehouse_app.adapters.sink.null_sink import NullSink
+        return NullSink()
+    from warehouse_app.adapters.sink.graphql_sink import GraphqlSink
+    return GraphqlSink(cfg)
