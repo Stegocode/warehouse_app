@@ -14,7 +14,6 @@ from warehouse_app.config import Config
 
 logger = logging.getLogger(__name__)
 
-_API_URL = "https://api.monday.com/v2"
 _ORDER_RE = re.compile(r"^\s*([A-Z]?-?\d{3,6}[A-Z0-9-]*)\b", re.IGNORECASE)
 
 _COLUMNS_QUERY = """
@@ -60,14 +59,17 @@ class GraphqlSink:
             raise RuntimeError("SINK_BOARD_ID is required for sink_type=graphql")
         if not cfg.sink_delivery_col:
             raise RuntimeError("SINK_DELIVERY_COL is required for sink_type=graphql")
+        if not cfg.sink_api_url:
+            raise RuntimeError("SINK_API_URL is required for sink_type=graphql")
         self._token = cfg.sink_api_token
+        self._api_url = cfg.sink_api_url
         self._board_id = cfg.sink_board_id
         self._delivery_col = cfg.sink_delivery_col
         self._col_ids: dict[str, str] | None = None
 
     def _graphql(self, query: str, variables: dict) -> dict:
         resp = requests.post(
-            _API_URL,
+            self._api_url,
             json={"query": query, "variables": variables},
             headers={"Authorization": self._token, "Content-Type": "application/json"},
             timeout=30,

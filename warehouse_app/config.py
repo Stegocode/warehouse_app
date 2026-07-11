@@ -25,6 +25,7 @@ class Config:
     source_type:         SourceType
     sink_type:           SinkType
     sink_api_token:      str | None
+    sink_api_url:        str | None
     sink_board_id:       str | None
     sink_delivery_col:   str | None
     owned_fleet_trucks:      frozenset[str] = frozenset()
@@ -64,6 +65,7 @@ def load(env_file: str | Path | None = None) -> Config:
         source_type=source_type,
         sink_type=sink_type,
         sink_api_token=os.getenv("SINK_API_TOKEN"),
+        sink_api_url=os.getenv("SINK_API_URL"),
         sink_board_id=os.getenv("SINK_BOARD_ID"),
         sink_delivery_col=os.getenv("SINK_DELIVERY_COL"),
         owned_fleet_trucks=owned,
