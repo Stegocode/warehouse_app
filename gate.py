@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -37,17 +38,26 @@ def ok(msg: str) -> None:
 # ── A: Banned names ───────────────────────────────────────────────────────────
 
 def check_banned() -> None:
-    print("\n[A] Banned names (.conformance-banned)")
+    print("\n[A] Banned names (.conformance-banned or BANNED_TOKENS secret)")
     banned_file = ROOT / ".conformance-banned"
-    if not banned_file.exists():
-        fail(".conformance-banned not found")
+
+    if banned_file.exists():
+        raw = banned_file.read_text()
+    elif os.environ.get("BANNED_TOKENS"):
+        raw = os.environ["BANNED_TOKENS"]
+    else:
+        print("  skip  no .conformance-banned file and no BANNED_TOKENS env var — "
+              "copy .conformance-banned.example to .conformance-banned to enable")
         return
 
     tokens = [
         line.strip().lower()
-        for line in banned_file.read_text().splitlines()
+        for line in raw.splitlines()
         if line.strip() and not line.startswith("#")
     ]
+    if not tokens:
+        print("  skip  banned-token list is empty")
+        return
 
     exempt = {".env", ".env.example", ".conformance-banned", "gate.py",
               "ADR-0001-hexagonal-architecture.md", "DEBT.md"}

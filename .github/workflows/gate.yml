@@ -24,3 +24,7 @@ jobs:
 
       - name: Conformance gate
         run: python gate.py
+        env:
+          # Set BANNED_TOKENS in repo Settings → Secrets → Actions.
+          # One token per line. Check A is skipped if the secret is not set.
+          BANNED_TOKENS: ${{ secrets.BANNED_TOKENS }}

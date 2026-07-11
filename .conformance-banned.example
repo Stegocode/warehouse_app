@@ -1,0 +1,14 @@
+# Banned tokens for check A — Rule 10 (domain vocabulary only).
+# Copy this file to .conformance-banned (gitignored) and add your deployment's
+# client names and vendor-specific identifiers.
+#
+# One token per line, case-insensitive substring match against all .py files.
+# Lines starting with # are ignored.
+#
+# In CI, set the BANNED_TOKENS repository secret instead of committing this file.
+# Format: one token per line, same as this file.
+#
+# Examples (replace with real values):
+#   myclient
+#   myvendor
+#   my-erp-system

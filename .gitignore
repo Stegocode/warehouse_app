@@ -43,6 +43,10 @@ Thumbs.db
 HANDOFF.md
 *.local.md
 
+# Conformance banned-token list — contains client/vendor names, never commit.
+# Copy .conformance-banned.example to .conformance-banned and fill in real names.
+.conformance-banned
+
 # Playwright
 playwright-report/
 test-results/
