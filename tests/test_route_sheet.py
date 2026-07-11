@@ -13,7 +13,7 @@ class TestNormTruck:
 
     def test_plain_number_uppercased(self):
         assert norm_truck("68") == "68"
-        assert norm_truck("basco") == "BASCO"
+        assert norm_truck("fleet") == "FLEET"
 
     def test_alias_takes_priority(self):
         aliases = {"Truck A": "OWN-01", "HUB 1": "OWN-02"}
