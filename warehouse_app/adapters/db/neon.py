@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 _UPSERT_INVENTORY_SQL = """
     INSERT INTO inventory_items (
         source_inventory_id, source_model_id, model_number, manufacturer, serial_number,
+        image_url, short_description,
         source_location_id, source_whse_location,
         source_status, status,
         source_order_item_id, source_order_id,
@@ -31,6 +32,7 @@ _UPSERT_INVENTORY_SQL = """
     ) VALUES (
         %(source_inventory_id)s, %(source_model_id)s, %(model_number)s,
         %(manufacturer)s, %(serial_number)s,
+        %(image_url)s, %(short_description)s,
         %(source_location_id)s, %(source_whse_location)s,
         %(source_status)s, %(status)s,
         %(source_order_item_id)s, %(source_order_id)s,
@@ -43,6 +45,8 @@ _UPSERT_INVENTORY_SQL = """
         model_number          = EXCLUDED.model_number,
         manufacturer          = EXCLUDED.manufacturer,
         serial_number         = EXCLUDED.serial_number,
+        image_url             = EXCLUDED.image_url,
+        short_description     = EXCLUDED.short_description,
         source_location_id    = EXCLUDED.source_location_id,
         source_whse_location  = EXCLUDED.source_whse_location,
         source_status         = EXCLUDED.source_status,
@@ -112,9 +116,12 @@ _UPSERT_STOP_SQL = """
         %(source_order_id)s, %(customer_name)s, %(delivery_address)s, %(delivery_notes)s,
         now(), now()
     )
-    ON CONFLICT (delivery_date, truck_id, source_order_id)
+    ON CONFLICT (delivery_date, source_order_id)
     WHERE source_order_id IS NOT NULL
     DO UPDATE SET
+        -- truck_id is now updatable rather than part of the identity: a re-routed order
+        -- stays the SAME stop (same stop_id), so picks already claimed against it survive.
+        truck_id       = EXCLUDED.truck_id,
         sink_item_id   = COALESCE(EXCLUDED.sink_item_id,  delivery_stops.sink_item_id),
         sink_status    = COALESCE(EXCLUDED.sink_status,   delivery_stops.sink_status),
         stop_order     = COALESCE(EXCLUDED.stop_order,    delivery_stops.stop_order),
@@ -122,6 +129,31 @@ _UPSERT_STOP_SQL = """
         delivery_notes = COALESCE(EXCLUDED.delivery_notes, delivery_stops.delivery_notes),
         synced_at      = now(),
         updated_at     = now()
+"""
+
+# Stops that were on a previous route sheet for this date but are not on this one.
+# in_progress counts pick rows a human has already acted on — those must never be
+# deleted out from under them.
+_VANISHED_STOPS_SQL = """
+    SELECT ds.stop_id,
+           ds.source_order_id,
+           ds.truck_id,
+           (SELECT count(*) FROM pick_queue pq
+             WHERE pq.stop_id = ds.stop_id AND pq.status <> 'queued') AS in_progress
+    FROM delivery_stops ds
+    WHERE ds.delivery_date = %(d)s
+      AND ds.source_order_id <> ALL(%(orders)s)
+"""
+
+_DELETE_QUEUED_FOR_STOPS_SQL = """
+    DELETE FROM pick_queue
+    WHERE stop_id = ANY(%(stop_ids)s)
+      AND status = 'queued'
+"""
+
+_DELETE_STOPS_SQL = """
+    DELETE FROM delivery_stops
+    WHERE stop_id = ANY(%(stop_ids)s)
 """
 
 _FETCH_STOPS_SQL = """
@@ -136,18 +168,63 @@ _FETCH_STOPS_SQL = """
 
 
 def upsert_stops(conn: psycopg.Connection, rows: list[dict]) -> int:
+    """Upsert the route sheet for a date without destroying work already in progress.
+
+    Safe to re-run mid-shift. Stops are matched on their natural key
+    (delivery_date, source_order_id), so stop_id is stable and pick rows stay attached
+    even when an order is moved to a different truck.
+
+    A stop that has dropped off the route sheet has its still-'queued' picks removed and
+    the stop deleted. If a picker has already claimed or picked against that stop, the
+    stop is LEFT ALONE and a warning is raised — an order leaving the route does not
+    un-happen the fact that someone physically moved the appliance. Deleting it would
+    make the database lie about the floor.
+    """
     if not rows:
         return 0
+
     delivery_date = rows[0]["delivery_date"]
-    with conn.cursor() as cur:
-        # pick_queue has a FK to delivery_stops; clear it first for this date.
-        cur.execute(
-            "DELETE FROM pick_queue WHERE delivery_date = %s",
-            (delivery_date,),
+    orders = [r["source_order_id"] for r in rows if r.get("source_order_id") is not None]
+    if len(orders) != len(rows):
+        raise RuntimeError(
+            "upsert_stops: every stop row must carry a source_order_id — it is the "
+            "natural key. Refusing to write rows that cannot be matched on a refresh."
         )
-        cur.execute("DELETE FROM delivery_stops WHERE delivery_date = %s", (delivery_date,))
+
+    with conn.cursor() as cur:
+        cur.execute(_VANISHED_STOPS_SQL, {"d": delivery_date, "orders": orders})
+        vanished = cur.fetchall()
+
+        droppable = [v for v in vanished if v[3] == 0]
+        in_progress = [v for v in vanished if v[3] > 0]
+
+        if in_progress:
+            for stop_id, order_id, truck_id, n in in_progress:
+                logger.warning(
+                    "upsert_stops: order %s (truck %s) left the route sheet for %s but has "
+                    "%d pick row(s) already assigned or picked — KEEPING the stop. "
+                    "Resolve by hand: the goods may already be staged.",
+                    order_id, truck_id, delivery_date, n,
+                )
+
+        if droppable:
+            stop_ids = [v[0] for v in droppable]
+            cur.execute(_DELETE_QUEUED_FOR_STOPS_SQL, {"stop_ids": stop_ids})
+            dropped_picks = cur.rowcount
+            cur.execute(_DELETE_STOPS_SQL, {"stop_ids": stop_ids})
+            logger.info(
+                "upsert_stops: %d stop(s) left the route sheet for %s — removed with "
+                "%d queued pick row(s)",
+                len(droppable), delivery_date, dropped_picks,
+            )
+
         cur.executemany(_UPSERT_STOP_SQL, rows)
+
     conn.commit()
+    logger.info(
+        "upsert_stops: upserted %d stop(s) for %s (stop_id preserved; in-progress picks intact)",
+        len(rows), delivery_date,
+    )
     return len(rows)
 
 
@@ -160,28 +237,30 @@ def fetch_stops(conn: psycopg.Connection, delivery_date: date) -> list[DeliveryS
 
 # ── Pick queue ────────────────────────────────────────────────────────────────
 
-_ENSURE_PQ_INDEX_SQL = """
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_pq_stop_inventory
-        ON pick_queue (stop_id, source_inventory_id)
-        WHERE source_inventory_id IS NOT NULL
-"""
-
+# Only 'queued' rows are rebuildable. A row that a picker has already claimed
+# ('assigned') or physically moved ('picked' and beyond) is a record of something that
+# happened in the real world — a refresh must never delete it. This previously also
+# cleared 'assigned', which silently destroyed in-flight claims on every rebuild.
 _CLEAR_PQ_DATE_SQL = """
     DELETE FROM pick_queue
     WHERE delivery_date = %(d)s
-      AND status IN ('queued', 'assigned')
+      AND status = 'queued'
 """
 
+# Rows surviving the clear are in-progress or complete. For an 'assigned' row we
+# refresh routing (the truck or stop may have moved) but never touch status,
+# assigned_to, or assigned_at — the claim stands. Anything further along is left
+# entirely alone.
 _UPSERT_PQ_SQL = """
     INSERT INTO pick_queue (
         stop_id, source_inventory_id, source_order_item_id,
-        delivery_date, truck_id, stop_order, piece_order,
+        delivery_date, truck_id, truck_sort_order, stop_order, piece_order,
         model_number, whse_location,
         carton_w_in, carton_h_in, carton_d_in, gross_weight_lb,
         status, created_at, updated_at
     ) VALUES (
         %(stop_id)s, %(source_inventory_id)s, %(source_order_item_id)s,
-        %(delivery_date)s, %(truck_id)s, %(stop_order)s, %(piece_order)s,
+        %(delivery_date)s, %(truck_id)s, %(truck_sort_order)s, %(stop_order)s, %(piece_order)s,
         %(model_number)s, %(whse_location)s,
         %(carton_w_in)s, %(carton_h_in)s, %(carton_d_in)s, %(gross_weight_lb)s,
         'queued', now(), now()
@@ -190,6 +269,8 @@ _UPSERT_PQ_SQL = """
     WHERE source_inventory_id IS NOT NULL
     DO UPDATE SET
         source_order_item_id = EXCLUDED.source_order_item_id,
+        truck_id             = EXCLUDED.truck_id,
+        truck_sort_order     = EXCLUDED.truck_sort_order,
         stop_order           = EXCLUDED.stop_order,
         piece_order          = EXCLUDED.piece_order,
         whse_location        = EXCLUDED.whse_location,
@@ -198,7 +279,7 @@ _UPSERT_PQ_SQL = """
         carton_d_in          = EXCLUDED.carton_d_in,
         gross_weight_lb      = EXCLUDED.gross_weight_lb,
         updated_at           = now()
-    WHERE pick_queue.status IN ('queued', 'assigned')
+    WHERE pick_queue.status = 'assigned'
 """
 
 # Location IDs that contain physically pickable inventory.
@@ -252,11 +333,18 @@ def write_pick_queue(
     rows: list[PickRow],
     delivery_date: date,
 ) -> int:
+    """Rebuild the queued rows for a date, preserving anything already in progress.
+
+    Safe to run while pickers are working: 'assigned' and 'picked' rows survive, and
+    the clear runs unconditionally so an empty build correctly leaves zero queued rows
+    rather than silently stranding a stale queue.
+
+    Performs no DDL — the index management this used to do on every call now lives in
+    schema/migrations/0002_pick_module.sql.
+    """
     with conn.cursor() as cur:
-        cur.execute("DROP INDEX IF EXISTS uq_pq_stop_order_item")
-        cur.execute(_ENSURE_PQ_INDEX_SQL)
-        if rows:
-            cur.execute(_CLEAR_PQ_DATE_SQL, {"d": delivery_date})
+        cur.execute(_CLEAR_PQ_DATE_SQL, {"d": delivery_date})
+        cleared = cur.rowcount
         row_dicts = [
             {
                 "stop_id":              r.stop_id,
@@ -264,6 +352,7 @@ def write_pick_queue(
                 "source_order_item_id": r.source_order_item_id,
                 "delivery_date":        r.delivery_date,
                 "truck_id":             r.truck_id,
+                "truck_sort_order":     r.truck_sort_order,
                 "stop_order":           r.stop_order,
                 "piece_order":          r.piece_order,
                 "model_number":         r.model_number,
@@ -279,4 +368,9 @@ def write_pick_queue(
         for i in range(0, len(row_dicts), batch):
             cur.executemany(_UPSERT_PQ_SQL, row_dicts[i : i + batch])
     conn.commit()
+    logger.info(
+        "write_pick_queue: cleared %d queued row(s), wrote %d for %s "
+        "(in-progress rows preserved)",
+        cleared, len(rows), delivery_date,
+    )
     return len(rows)

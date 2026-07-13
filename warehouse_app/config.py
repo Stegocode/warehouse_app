@@ -54,8 +54,19 @@ def load(env_file: str | Path | None = None) -> Config:
     if sink_type not in ("graphql", "null"):
         raise RuntimeError(f"SINK_TYPE must be 'graphql' or 'null', got {sink_type!r}")
 
-    raw_trucks = os.getenv("OWNED_FLEET_TRUCKS", "")
+    # Fail closed: an unset OWNED_FLEET_TRUCKS would classify EVERY truck as third-party,
+    # silently inverting the pick order with no error and no warning. An empty fleet is
+    # never a legitimate configuration, so refuse to start rather than pick the wrong item.
+    raw_trucks = _require("OWNED_FLEET_TRUCKS")
     owned = frozenset(t.strip().upper() for t in raw_trucks.split(",") if t.strip())
+    if not owned:
+        raise RuntimeError("OWNED_FLEET_TRUCKS is set but contains no truck labels")
+
+    # The graphql sink cannot function without a URL and a token. Surfacing that here,
+    # at boot, beats a None turning up deep inside an HTTP call mid-sync.
+    if sink_type == "graphql":
+        _require("SINK_API_URL")
+        _require("SINK_API_TOKEN")
 
     return Config(
         database_url=_require("DATABASE_URL"),

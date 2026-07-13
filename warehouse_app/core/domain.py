@@ -11,7 +11,14 @@ from typing import Literal
 # ── Status vocabularies ───────────────────────────────────────────────────────
 
 ItemStatus = Literal["on_order", "in_warehouse", "in_transit", "missing"]
-PickStatus = Literal["queued", "assigned", "picked", "staged", "on_truck", "discrepancy"]
+
+# Pick lifecycle: queued -> assigned -> picked -> in_transit
+#   picked      the human physically moved the box (set immediately on confirm)
+#   in_transit  the ERP agrees (set only once the ERP write lands; erp_confirmed=TRUE)
+# A 'picked' row with erp_confirmed = FALSE is the pending-ERP-write queue.
+PickStatus = Literal[
+    "queued", "assigned", "picked", "in_transit", "staged", "on_truck", "discrepancy",
+]
 TicketAction = Literal["pick", "stage", "move", "receive", "relocate"]
 TicketStatus = Literal["open", "in_progress", "confirmed", "cancelled"]
 ProductClass = Literal[
@@ -77,6 +84,52 @@ class DeliveryStop:
 
 
 @dataclass(frozen=True)
+class PickAssignment:
+    """One claimed pick, with everything the picker needs on screen.
+
+    Assembled by joining pick_queue to inventory_items (manufacturer, serial, photo) and
+    delivery_stops (customer). pick_queue itself stores none of that — it is the work
+    list, not the product catalogue.
+    """
+
+    pick_id:             str
+    delivery_date:       date
+    truck_id:            str
+    stop_order:          int | None
+    piece_order:         int
+    pieces_at_stop:      int
+    model_number:        str
+    whse_location:       str | None
+    status:              PickStatus
+    assigned_to:         str | None
+    manufacturer:        str | None = None
+    short_description:   str | None = None
+    image_url:           str | None = None
+    serial_number:       str | None = None
+    customer_name:       str | None = None
+
+
+@dataclass(frozen=True)
+class PickProgress:
+    """Queue state for a delivery date — shared by every picker on the floor."""
+
+    delivery_date: date
+    queued:        int
+    assigned:      int
+    picked:        int
+    in_transit:    int
+    other:         int
+
+    @property
+    def total(self) -> int:
+        return self.queued + self.assigned + self.picked + self.in_transit + self.other
+
+    @property
+    def done(self) -> int:
+        return self.picked + self.in_transit
+
+
+@dataclass(frozen=True)
 class PickRow:
     stop_id:              str
     source_inventory_id:  int | None
@@ -87,6 +140,10 @@ class PickRow:
     piece_order:          int
     model_number:         str
     whse_location:        str | None
+    # Dense rank of the truck within the pick order (0 = picked first). Persisted because
+    # owned-fleet-first is a config rule (OWNED_FLEET_TRUCKS), not something a truck label
+    # encodes — so no ORDER BY over truck_id can reproduce it except by coincidence.
+    truck_sort_order:     int | None = None
     carton_w_in:          int | None = None
     carton_h_in:          int | None = None
     carton_d_in:          int | None = None

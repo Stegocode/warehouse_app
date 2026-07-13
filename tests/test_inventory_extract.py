@@ -3,13 +3,22 @@ from warehouse_app.services.inventory_sync import _extract
 
 
 def _raw(**overrides) -> dict:
-    """Minimal valid raw inventory record with optional field overrides."""
+    """Minimal valid raw inventory record with optional field overrides.
+
+    Keys here mirror the real source payload. The previous fixture invented
+    "Manufacturer" and "SerialNumber" — keys the source never returns — and asserted
+    nothing about either, so the suite stayed green while production wrote NULL to
+    both columns for all 14,505 rows. Fixtures must not invent the schema.
+    """
     base = {
         "InventoryId": 12345,
         "ModelId_FK": 99,
         "ModelNumber": "MODEL-X ",   # trailing space — should be stripped
-        "Manufacturer": "Acme",
-        "SerialNumber": "SN001",
+        "manufacturer": {"MID": 27, "Name": "Acme", "GID_FK": 2},   # nested, not top-level
+        "MFGSerialNumber": "SN001",
+        "ScannedMFGSerialNumber": None,
+        "MobileImageURL": "https://cdn.example/img.jpg",
+        "ShortDescription": "MODEL-X 24in Dishwasher",
         "LocationId_FK": 1,
         "WHSELocationId_FK": 513,
         "InventoryStatus": 1,
@@ -90,3 +99,61 @@ class TestExtractBinLocation:
     def test_bin_location_null_when_name_empty(self):
         row = _extract(_raw(whse_location={"Name": ""}))
         assert row["source_whse_location"] is None
+
+
+class TestExtractManufacturer:
+    def test_manufacturer_from_nested_object(self):
+        """manufacturer must come from manufacturer.Name — there is no top-level key."""
+        row = _extract(_raw(manufacturer={"MID": 27, "Name": "Bosch"}))
+        assert row["manufacturer"] == "Bosch"
+
+    def test_manufacturer_null_when_object_absent(self):
+        assert _extract(_raw(manufacturer=None))["manufacturer"] is None
+
+    def test_top_level_manufacturer_key_is_not_read(self):
+        """Guards the original bug: the source has no top-level 'Manufacturer' key."""
+        raw = _raw(manufacturer=None)
+        raw["Manufacturer"] = "ShouldBeIgnored"
+        assert _extract(raw)["manufacturer"] is None
+
+
+class TestExtractSerialNumber:
+    def test_real_serial_is_kept(self):
+        assert _extract(_raw(MFGSerialNumber="R000041858"))["serial_number"] == "R000041858"
+
+    def test_scanned_serial_preferred_over_mfg(self):
+        row = _extract(_raw(MFGSerialNumber="R001", ScannedMFGSerialNumber="SCANNED-9"))
+        assert row["serial_number"] == "SCANNED-9"
+
+    def test_placeholder_equal_to_inventory_id_is_rejected(self):
+        """The source auto-fills MFGSerialNumber with the InventoryId (~26% of stock).
+
+        Such a value is not a scannable label and must not masquerade as one.
+        """
+        row = _extract(_raw(InventoryId=127937, MFGSerialNumber="127937"))
+        assert row["serial_number"] is None
+
+    def test_null_serial_stays_null(self):
+        row = _extract(_raw(MFGSerialNumber=None, ScannedMFGSerialNumber=None))
+        assert row["serial_number"] is None
+
+    def test_falls_back_to_mfg_when_scanned_is_placeholder(self):
+        row = _extract(_raw(
+            InventoryId=500, ScannedMFGSerialNumber="500", MFGSerialNumber="REAL-1",
+        ))
+        assert row["serial_number"] == "REAL-1"
+
+
+class TestExtractDisplayFields:
+    def test_image_and_description_captured(self):
+        row = _extract(_raw())
+        assert row["image_url"] == "https://cdn.example/img.jpg"
+        assert row["short_description"] == "MODEL-X 24in Dishwasher"
+
+    def test_falls_back_to_imgurl_when_no_mobile_image(self):
+        raw = _raw(MobileImageURL=None)
+        raw["ImgURL"] = "https://cdn.example/desktop.jpg"
+        assert _extract(raw)["image_url"] == "https://cdn.example/desktop.jpg"
+
+    def test_blank_description_becomes_null(self):
+        assert _extract(_raw(ShortDescription="  "))["short_description"] is None
