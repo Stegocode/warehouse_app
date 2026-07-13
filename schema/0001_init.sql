@@ -1,6 +1,20 @@
--- warehouse_app canonical schema (v1)
+-- warehouse_app canonical schema (v1) — BASELINE. Do not edit.
+--
 -- Applies to a fresh database. Reflects all migrations from model_catalog_module
 -- 0001 + 0002 (constraint relaxation) + 0003 (column renames to domain vocabulary).
+--
+-- This file is the frozen starting point, not the current schema. Every change since
+-- lives as a numbered, idempotent, forward-only file in schema/migrations/, applied by:
+--
+--     python -m warehouse_app.scripts.migrate --env-file <path>
+--
+-- Bootstrapping a fresh database:
+--     1. psql < schema/0001_init.sql        (this file, once)
+--     2. python -m warehouse_app.scripts.migrate   (everything since)
+--
+-- Editing this file would desync it from the databases already built on it. Add a
+-- migration instead — the runner rejects a migration whose contents changed after it
+-- was applied, precisely so the repo and the database cannot silently diverge.
 --
 -- Naming conventions:
 --   source_*  — fields from the upstream ERP / inventory system
