@@ -9,11 +9,16 @@ Every deferred fix gets an entry here before it ships. Format:
 
 ## Open
 
-DEBT-ERP-001  2026-07-13  Rule 13  No write path to the source ERP exists. A confirmed
-  pick is recorded as status='picked' with erp_confirmed=FALSE; nothing sets 'in_transit'.
-  Why deferred: the owner wants a single async, fail-loud write mechanism for the whole
-    estate rather than one per app, and is not ready to build it. Blocking picking on it
-    would have blocked the pick screen behind an unstarted workstream.
+DEBT-ERP-001  2026-07-13  Rule 13  ERP write ADAPTER now exists (2026-07-14); the async
+  drainer that USES it is still deferred. A confirmed pick is recorded as status='picked'
+  with erp_confirmed=FALSE; nothing yet flips it to 'in_transit'.
+  Built 2026-07-14: adapters/source/scanner_write.py — HttpScannerWriter / FakeScannerWriter
+    behind ScannerWritePort, credential-injected (per-operator), with mark_in_transit and
+    receive_serial. Request builders unit-tested against the captured shapes. This is the
+    low-level write capability; it is not wired into any flow yet.
+  Why the DRAINER is deferred: the owner wants a single async, fail-loud write mechanism for
+    the whole estate rather than one per app, and is not ready to build it. Blocking picking
+    on it would have blocked the pick screen behind an unstarted workstream.
   Scope not covered: pick_queue rows accumulate as picked + erp_confirmed=FALSE. Nothing
     reconciles them against the ERP yet. KNOWN, ACCEPTED gap, not an oversight.
   Domain note (2026-07-14): the operation uses the ERP's InventoryStatus=3 ("in transit"),
@@ -53,12 +58,31 @@ DEBT-ERP-001  2026-07-13  Rule 13  No write path to the source ERP exists. A con
     - NOT /api/v2 (that is a different JWT-guarded API). The scanner API is /api/scanner/*
       with HTTP Basic auth.
 
-  Fix path: add SourcePort.mark_in_transit(inventory_id, order_item_id, scanned_at) ->
-    implemented on HttpSource with the recipe above; and release/undo via the DELETE verb.
-    Then an async drainer processes WHERE status='picked' AND erp_confirmed=FALSE, calls it,
-    and on success sets erp_confirmed=TRUE, status='in_transit'. Fail loud: leave the row
-    picked + erp_confirmed=FALSE on any error so it retries; never mark 'in_transit' unless
-    the ERP call returned success.
+  RECEIVE RECIPE (captured + verified live 2026-07-14 on InventoryId 137877 — this one PUT
+    replaces receiving_app's entire 8-step Playwright wizard):
+
+      PUT {SOURCE_BASE_URL}/api/scanner/inventory/receiveserial/<InventoryId>?version=<appver>
+      Authorization: Basic base64(<erp_username>:<erp_password>)
+      body: { "serial": <scanned serial>, "serial_status": null,
+              "location": <LocationId>, "WHSELocation": <WHSELocationId> }
+
+    - Flips an on-order unit to InventoryStatus=1 (received), stamps ReceivedDate, and
+      assigns WHSELocation (the bin — this is the seam a future putaway/distance engine
+      fills: the API already takes the bin as a parameter). Movement note "via the Scanner".
+    - InventoryId is in the PATH; the scanned serial is in the body. Open Q: the verified
+      capture had a PLACEHOLDER serial (= InventoryId), so body `serial` vs the path id is
+      not fully disambiguated for an item with a REAL distinct serial. One capture of
+      receiving a real-serial item settles it.
+    - Same per-operator Basic auth as in-transit.
+
+  Still unmapped (one phone capture each, same method): transfer-location, photo upload.
+
+  Fix path (remaining): wire the adapter into an async drainer. It processes
+    WHERE status='picked' AND erp_confirmed=FALSE, looks up the picker's ERP creds from
+    Dolly's vault (keyed on assigned_to), calls mark_in_transit, and on success sets
+    erp_confirmed=TRUE, status='in_transit'. Fail loud: leave the row picked +
+    erp_confirmed=FALSE on any error so it retries; never mark 'in_transit' unless the ERP
+    call returned success. Receiving uses receive_serial the same way.
 
 DEBT-ARCH-001  2026-07-10  Rule 7  Scripts in model_catalog_module still load
   .env from a hardcoded absolute Windows path.

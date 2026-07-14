@@ -23,3 +23,17 @@ def make_sink(cfg: Config):
         return NullSink()
     from warehouse_app.adapters.sink.graphql_sink import GraphqlSink
     return GraphqlSink(cfg)
+
+
+def make_scanner_writer(cfg: Config):
+    """Return the ERP scanner-write adapter matching SOURCE_TYPE.
+
+    Follows SOURCE_TYPE (the scanner API is part of the same upstream ERP): a 'fake'
+    source yields a FakeScannerWriter so the full write path runs offline. Operator
+    credentials are NOT taken here — they are injected per call by the caller.
+    """
+    if cfg.source_type == "fake":
+        from warehouse_app.adapters.source.scanner_write import FakeScannerWriter
+        return FakeScannerWriter()
+    from warehouse_app.adapters.source.scanner_write import HttpScannerWriter
+    return HttpScannerWriter(cfg.source_base_url)
