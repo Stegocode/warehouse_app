@@ -9,6 +9,18 @@ Every deferred fix gets an entry here before it ships. Format:
 
 ## Open
 
+DEBT-ROUTE-001  2026-07-14  Rule 14  The void finder returns a bin STRING (whse_location,
+  e.g. "01-15-1"); the ERP receive_serial write takes a numeric WHSELocationId (e.g. 964).
+  So a computed putaway bin cannot yet be fed into an actual receive without a
+  whse_location -> WHSELocationId mapping.
+  Why deferred: routing computing the bin is self-contained and useful on its own; wiring
+    it into the receive call also waits on the receiving_app convergence, which has not
+    started. Building the mapping now would be speculative.
+  Fix path: the ERP holds this mapping (inventory_items carries both WHSELocationId_FK and
+    source_whse_location). Sync a whse_location -> WHSELocationId lookup, then the putaway
+    step resolves the finder's top bin to an id before calling receive_serial. Boundary
+    (Rule 14): rank_putaway_bins deliberately stops at ranking; it does not choose or write.
+
 DEBT-ERP-001  2026-07-13  Rule 13  ERP write ADAPTER now exists (2026-07-14); the async
   drainer that USES it is still deferred. A confirmed pick is recorded as status='picked'
   with erp_confirmed=FALSE; nothing yet flips it to 'in_transit'.
