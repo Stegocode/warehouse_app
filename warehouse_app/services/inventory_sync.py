@@ -13,17 +13,9 @@ import psycopg
 
 from warehouse_app.adapters.db import neon
 from warehouse_app.adapters.source.ports import SourcePort
+from warehouse_app.core.domain import SOURCE_STATUS_MAP, UNKNOWN_STATUS_FALLBACK
 
 logger = logging.getLogger(__name__)
-
-_STATUS_MAP: dict[int, str] = {
-    0: "on_order",
-    1: "in_warehouse",
-    2: "in_transit",
-    3: "missing",
-}
-
-_UNKNOWN_STATUS_FALLBACK = "in_warehouse"
 
 
 def _serial_number(raw: dict) -> str | None:
@@ -64,7 +56,7 @@ def _extract(raw: dict) -> dict | None:
         "source_location_id":   raw.get("LocationId_FK"),
         "source_whse_location": whse_loc.get("Name") or None,
         "source_status":        raw_status,
-        "status":               _STATUS_MAP.get(raw_status, _UNKNOWN_STATUS_FALLBACK),
+        "status":               SOURCE_STATUS_MAP.get(raw_status, UNKNOWN_STATUS_FALLBACK),
         "source_order_item_id": raw.get("OrderItemId_FK"),
         "source_order_id":      order_item.get("OrderFK"),
         "is_non_sellable":      bool(raw.get("IsNonSellable")),
@@ -76,21 +68,21 @@ def _extract(raw: dict) -> dict | None:
 
 
 def _report_unmapped_statuses(rows: list[dict]) -> None:
-    """Warn once per sync about source status codes absent from _STATUS_MAP.
+    """Warn once per sync about source status codes absent from SOURCE_STATUS_MAP.
 
     The fallback keeps the sync running, but it must never be silent: an unmapped
     code means the source added a state we do not model, and those rows are being
-    filed as in_warehouse on a guess. See DEBT-SYNC-002.
+    filed as the fallback on a guess. See DEBT-SYNC-002.
     """
     unmapped = Counter(
-        r["source_status"] for r in rows if r["source_status"] not in _STATUS_MAP
+        r["source_status"] for r in rows if r["source_status"] not in SOURCE_STATUS_MAP
     )
     if unmapped:
         detail = ", ".join(f"{code!r}={n}" for code, n in sorted(unmapped.items(), key=str))
         logger.warning(
-            "inventory_sync: %d record(s) carry a source status not in _STATUS_MAP "
+            "inventory_sync: %d record(s) carry a source status not in SOURCE_STATUS_MAP "
             "(%s) — filed as %r. Identify these codes and map them explicitly.",
-            sum(unmapped.values()), detail, _UNKNOWN_STATUS_FALLBACK,
+            sum(unmapped.values()), detail, UNKNOWN_STATUS_FALLBACK,
         )
 
 

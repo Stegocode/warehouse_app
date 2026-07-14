@@ -12,7 +12,13 @@ from datetime import date, datetime
 
 import psycopg
 
-from warehouse_app.core.domain import DeliveryStop, InventoryItem, PickRow
+from warehouse_app.core.domain import (
+    PICKABLE_SOURCE_STATUS,
+    SOURCE_STATUS_MAP,
+    DeliveryStop,
+    InventoryItem,
+    PickRow,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +83,18 @@ _JOIN_DIMS_SQL = """
            OR m.product_class IS NOT NULL)
 """
 
+# Prune inventory the ERP no longer returns (not seen in this sync). Never delete a row
+# still referenced by pick_queue: it is on someone's work list (perhaps already picked),
+# the FK would block the delete and roll back the whole sync, and an item on a pick list
+# is by definition not gone. Such rows are simply kept until the pick queue that holds
+# them is itself cleared.
 _PRUNE_INVENTORY_SQL = """
-    DELETE FROM inventory_items
-    WHERE source_synced_at < %(sync_start)s
+    DELETE FROM inventory_items i
+    WHERE i.source_synced_at < %(sync_start)s
+      AND NOT EXISTS (
+          SELECT 1 FROM pick_queue pq
+          WHERE pq.source_inventory_id = i.source_inventory_id
+      )
 """
 
 
@@ -286,6 +301,10 @@ _UPSERT_PQ_SQL = """
 # 1=WAREHO  2=OUTLET  3=BANGY  4=DAVIS  7=WILLCA  9=BEND
 _PICKABLE_LOCATION_IDS = (1, 2, 3, 4, 7, 9)
 
+# An item is only pickable when the ERP has it OPEN (present, available). Filtering here
+# is what stops a MISSING item from being sent to a picker, and an already-picked
+# (in_transit) item from being re-queued. Fail closed: an item of any other status, or of
+# no status at all (NULL), is excluded.
 _FETCH_ALLOCATED_SQL = """
     SELECT
         source_order_id, source_inventory_id, source_order_item_id,
@@ -295,7 +314,21 @@ _FETCH_ALLOCATED_SQL = """
     WHERE source_order_id = ANY(%(order_ids)s)
       AND is_allocated = TRUE
       AND source_location_id = ANY(%(pickable_ids)s)
+      AND source_status = %(pickable_status)s
     ORDER BY source_order_id, model_number, source_inventory_id
+"""
+
+# Diagnostic: allocated, in a pickable location, but NOT pickable status. These are the
+# rows the guard above drops — logged so the exclusion is visible, never silent.
+_EXCLUDED_FROM_PICK_SQL = """
+    SELECT source_status, count(*)
+    FROM inventory_items
+    WHERE source_order_id = ANY(%(order_ids)s)
+      AND is_allocated = TRUE
+      AND source_location_id = ANY(%(pickable_ids)s)
+      AND source_status IS DISTINCT FROM %(pickable_status)s
+    GROUP BY source_status
+    ORDER BY source_status
 """
 
 
@@ -305,12 +338,26 @@ def fetch_allocated_by_order(
 ) -> dict[int, list[InventoryItem]]:
     if not order_ids:
         return {}
+    params = {
+        "order_ids": order_ids,
+        "pickable_ids": list(_PICKABLE_LOCATION_IDS),
+        "pickable_status": PICKABLE_SOURCE_STATUS,
+    }
     by_order: dict[int, list[InventoryItem]] = {}
     with conn.cursor() as cur:
-        cur.execute(_FETCH_ALLOCATED_SQL, {
-            "order_ids": order_ids,
-            "pickable_ids": list(_PICKABLE_LOCATION_IDS),
-        })
+        cur.execute(_EXCLUDED_FROM_PICK_SQL, params)
+        excluded = cur.fetchall()
+        if excluded:
+            detail = ", ".join(
+                f"{SOURCE_STATUS_MAP.get(s, '?')}({s})={n}" for s, n in excluded
+            )
+            logger.warning(
+                "fetch_allocated_by_order: %d allocated item(s) excluded from picking "
+                "by status — %s. (in_transit = already picked; missing/sold/transfer "
+                "cannot be picked.)",
+                sum(n for _, n in excluded), detail,
+            )
+        cur.execute(_FETCH_ALLOCATED_SQL, params)
         cols = [d.name for d in cur.description]
         for row in cur.fetchall():
             rec = dict(zip(cols, row))
