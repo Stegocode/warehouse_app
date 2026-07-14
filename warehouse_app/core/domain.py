@@ -147,6 +147,10 @@ class PickAssignment:
     image_url:           str | None = None
     serial_number:       str | None = None
     customer_name:       str | None = None
+    # Will-call: an interrupt pick with no truck/stop. drop_point replaces the truck as the
+    # destination the picker takes it to.
+    is_will_call:        bool = False
+    drop_point:          str | None = None
 
 
 @dataclass(frozen=True)
