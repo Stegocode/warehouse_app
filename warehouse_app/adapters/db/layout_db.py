@@ -51,16 +51,19 @@ def upsert_bins(conn: psycopg.Connection, rows: list[dict]) -> int:
 
 # ── Graph nodes ────────────────────────────────────────────────────────────────
 
+# Columns match the live schema (and core.layout's output): kind/zone on nodes,
+# distance_m/ramp on edges. The previous SQL wrote node_type/z/weight — columns that do
+# not exist — so this upsert would have failed against the deployed graph tables.
 _UPSERT_NODES_SQL = """
     INSERT INTO graph_nodes
-        (node_id, x, y, z, node_type)
+        (node_id, kind, x, y, zone)
     VALUES
-        (%(node_id)s, %(x)s, %(y)s, %(z)s, %(node_type)s)
+        (%(node_id)s, %(kind)s, %(x)s, %(y)s, %(zone)s)
     ON CONFLICT (node_id) DO UPDATE SET
+        kind       = EXCLUDED.kind,
         x          = EXCLUDED.x,
         y          = EXCLUDED.y,
-        z          = EXCLUDED.z,
-        node_type  = EXCLUDED.node_type,
+        zone       = EXCLUDED.zone,
         updated_at = now()
 """
 
@@ -69,11 +72,12 @@ _UPSERT_NODES_SQL = """
 
 _UPSERT_EDGES_SQL = """
     INSERT INTO graph_edges
-        (node_a, node_b, weight)
+        (node_a, node_b, distance_m, ramp)
     VALUES
-        (%(node_a)s, %(node_b)s, %(weight)s)
+        (%(node_a)s, %(node_b)s, %(distance_m)s, %(ramp)s)
     ON CONFLICT (node_a, node_b) DO UPDATE SET
-        weight     = EXCLUDED.weight,
+        distance_m = EXCLUDED.distance_m,
+        ramp       = EXCLUDED.ramp,
         updated_at = now()
 """
 
@@ -85,8 +89,8 @@ def upsert_graph(
 ) -> tuple[int, int]:
     """Upsert nodes then edges. Returns (node_count, edge_count).
 
-    Node dict: {node_id, x, y, z, node_type}
-    Edge dict: {node_a, node_b, weight}
+    Node dict: {node_id, kind, x, y, zone}  (as produced by core.layout.extract_nodes)
+    Edge dict: {node_a, node_b, distance_m, ramp}  (core.layout.extract_edges)
     """
     with conn.cursor() as cur:
         for i in range(0, len(nodes), _BATCH):
