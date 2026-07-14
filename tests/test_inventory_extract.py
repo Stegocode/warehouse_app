@@ -51,12 +51,29 @@ class TestExtractFieldMapping:
         assert row["source_location_id"] == 1
 
     def test_status_mapped(self):
+        # The ERP's real InventoryStatus meanings — verified against its own UI.
+        # This previously asserted 2=in_transit and 3=missing, which was the bug:
+        # 2 is SOLD and 3 is IN-TRANSIT.
         assert _extract(_raw(InventoryStatus=0))["status"] == "on_order"
         assert _extract(_raw(InventoryStatus=1))["status"] == "in_warehouse"
-        assert _extract(_raw(InventoryStatus=2))["status"] == "in_transit"
-        assert _extract(_raw(InventoryStatus=3))["status"] == "missing"
+        assert _extract(_raw(InventoryStatus=2))["status"] == "sold"
+        assert _extract(_raw(InventoryStatus=3))["status"] == "in_transit"
+        assert _extract(_raw(InventoryStatus=7))["status"] == "missing"
 
-    def test_unknown_status_defaults_to_in_warehouse(self):
+    def test_all_erp_statuses_mapped(self):
+        expected = {
+            0: "on_order", 1: "in_warehouse", 2: "sold", 3: "in_transit",
+            4: "vendor_return_pending", 5: "vendor_returned", 6: "order_returned",
+            7: "missing", 8: "transfer", 9: "container",
+        }
+        for code, label in expected.items():
+            assert _extract(_raw(InventoryStatus=code))["status"] == label
+
+    def test_unknown_status_falls_back_and_is_reportable(self):
+        # A code outside 0-9 is unexpected; it falls back rather than crashing, but
+        # _report_unmapped_statuses logs it (tested via the map, not the label).
+        from warehouse_app.core.domain import SOURCE_STATUS_MAP
+        assert 99 not in SOURCE_STATUS_MAP
         assert _extract(_raw(InventoryStatus=99))["status"] == "in_warehouse"
 
     def test_boolean_flags(self):

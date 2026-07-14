@@ -10,7 +10,47 @@ from typing import Literal
 
 # ── Status vocabularies ───────────────────────────────────────────────────────
 
-ItemStatus = Literal["on_order", "in_warehouse", "in_transit", "missing"]
+ItemStatus = Literal[
+    "on_order",              # ERP 0 TO BE RECEIVED — allocated but not physically here
+    "in_warehouse",          # ERP 1 OPEN — present and available; the only pickable state
+    "sold",                  # ERP 2 SOLD
+    "in_transit",            # ERP 3 IN-TRANSIT — this business uses it to mean "picked"
+    "vendor_return_pending", # ERP 4 VENDOR RETURN PENDING
+    "vendor_returned",       # ERP 5 VENDOR RETURNED
+    "order_returned",        # ERP 6 ORDER RETURNED
+    "missing",               # ERP 7 MISSING
+    "transfer",              # ERP 8 TRANSFER — moving between locations
+    "container",             # ERP 9 CONTAINER
+]
+
+# The ERP's InventoryStatus integer -> our label. Taken verbatim from the ERP's own
+# status list (read out of its UI 2026-07-14), NOT guessed. The previous map had 2 and 3
+# inverted-ish (2 stored as in_transit though it means SOLD; 3 stored as missing though it
+# means IN-TRANSIT) and no entry for 7 (MISSING, silently filed as in_warehouse). Those
+# errors mislabeled ~500 live rows. See DEBT-SYNC-002.
+SOURCE_STATUS_MAP: dict[int, ItemStatus] = {
+    0: "on_order",
+    1: "in_warehouse",
+    2: "sold",
+    3: "in_transit",
+    4: "vendor_return_pending",
+    5: "vendor_returned",
+    6: "order_returned",
+    7: "missing",
+    8: "transfer",
+    9: "container",
+}
+
+# A code the ERP starts using that we have not mapped yet. Only reachable for values
+# outside 0-9. The label is cosmetic — pickability is gated on the integer, not this
+# label — but it must be reported loudly, never applied silently (Rule 4).
+UNKNOWN_STATUS_FALLBACK: ItemStatus = "in_warehouse"
+
+# The only ERP status an item may be picked in: OPEN (physically present, available).
+# Everything else is not here (on_order), already picked (in_transit), gone (sold,
+# returned), a problem (missing), or elsewhere (transfer, container). Fail closed:
+# pick nothing that is not explicitly OPEN.
+PICKABLE_SOURCE_STATUS = 1
 
 # Pick lifecycle: queued -> assigned -> picked -> in_transit
 #   picked      the human physically moved the box (set immediately on confirm)
