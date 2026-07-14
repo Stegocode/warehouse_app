@@ -60,15 +60,6 @@ DEBT-ERP-001  2026-07-13  Rule 13  No write path to the source ERP exists. A con
     picked + erp_confirmed=FALSE on any error so it retries; never mark 'in_transit' unless
     the ERP call returned success.
 
-DEBT-SYNC-002  2026-07-13  Rule 4  inventory_sync._STATUS_MAP does not cover source
-  status codes 6 and 7 (199 of 14,627 records on 2026-07-13). They fall back to
-  'in_warehouse' — a guess.
-  Why deferred: the meaning of codes 6 and 7 is unknown, and inventing a mapping would be
-    a confident wrong answer. The fallback is now reported loudly on every sync rather
-    than applied silently, so the guess is at least visible.
-  Fix path: Identify what 6 and 7 mean in the source system, add them to _STATUS_MAP, and
-    decide whether either should be excluded from pickable inventory.
-
 DEBT-ARCH-001  2026-07-10  Rule 7  Scripts in model_catalog_module still load
   .env from a hardcoded absolute Windows path.
   Why deferred: migration to warehouse_app in progress; paths will move to
@@ -106,3 +97,12 @@ DEBT-GATE-001  2026-07-10  Rule 15  Conformance gate (gate.py) is not yet
   Resolved 2026-07-13: .github/workflows/gate.yml runs `pytest tests/` then
   `python gate.py` on every push and PR to main, with BANNED_TOKENS injected
   from repository secrets. Branch protection requires it to pass.
+
+DEBT-SYNC-002  2026-07-13  Rule 4  inventory_sync._STATUS_MAP did not cover all source
+  status codes; unmapped ones fell back to 'in_warehouse' on a guess.
+  Resolved 2026-07-14: read the ERP's full status list from its own UI (0-9) and put the
+  correct map in core.domain.SOURCE_STATUS_MAP. Codes 2 and 3 were also actively wrong
+  (2=SOLD stored as in_transit; 3=IN-TRANSIT stored as missing). Migration 0004 widened
+  the CHECK to match. A pickability guard (source_status=OPEN only) now keeps
+  missing/sold/in-transit items off pick lists, logging every exclusion. Any code outside
+  0-9 is still reported loudly by _report_unmapped_statuses.
