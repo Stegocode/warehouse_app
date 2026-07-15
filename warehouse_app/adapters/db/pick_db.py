@@ -29,13 +29,16 @@ logger = logging.getLogger(__name__)
 
 # pick_queue is the work list, not the product catalogue: manufacturer, serial, and photo
 # live on inventory_items, and the customer on delivery_stops. The picker needs all three,
-# so every assignment read joins them.
+# so every assignment read joins them. A will-call row has no stop, so pieces_at_stop is 1
+# (each will-call piece stands alone) rather than a NULL-stop_id count.
 _ASSIGNMENT_COLUMNS = """
     q.pick_id, q.delivery_date, q.truck_id, q.stop_order, q.piece_order,
     q.model_number, q.whse_location, q.status, q.assigned_to,
     i.manufacturer, i.short_description, i.image_url, i.serial_number,
-    ds.customer_name,
-    (SELECT count(*) FROM pick_queue p2 WHERE p2.stop_id = q.stop_id) AS pieces_at_stop
+    ds.customer_name, q.is_will_call, q.drop_point,
+    CASE WHEN q.stop_id IS NULL THEN 1
+         ELSE (SELECT count(*) FROM pick_queue p2 WHERE p2.stop_id = q.stop_id)
+    END AS pieces_at_stop
 """
 
 _ASSIGNMENT_JOINS = """
@@ -43,6 +46,11 @@ _ASSIGNMENT_JOINS = """
     LEFT JOIN delivery_stops ds ON ds.stop_id = q.stop_id
 """
 
+# Will-call is a global interrupt: a will-call piece is served before any date's normal
+# queue, no matter which date the picker is working, because a customer is physically
+# waiting. So the WHERE admits will-call rows from ANY date plus the requested date's
+# normal rows, and the ORDER puts is_will_call first, then FIFO (will_call_seq), then the
+# normal owned-fleet-first tiers.
 _CLAIM_NEXT_SQL = f"""
     WITH claimed AS (
         UPDATE pick_queue
@@ -52,9 +60,12 @@ _CLAIM_NEXT_SQL = f"""
             updated_at  = now()
         WHERE pick_id = (
             SELECT pick_id FROM pick_queue
-            WHERE delivery_date = %(d)s
-              AND status = 'queued'
-            ORDER BY truck_sort_order NULLS LAST, stop_order, piece_order
+            WHERE status = 'queued'
+              AND (is_will_call OR delivery_date = %(d)s)
+            ORDER BY is_will_call DESC,
+                     will_call_seq NULLS LAST,
+                     truck_sort_order NULLS LAST,
+                     stop_order, piece_order
             LIMIT 1
             FOR UPDATE SKIP LOCKED
         )
@@ -72,13 +83,15 @@ _FETCH_ASSIGNMENT_SQL = f"""
     WHERE q.pick_id = %(pick_id)s
 """
 
+# A picker holds at most one assignment; find it whether it is a date-D pick or a global
+# will-call, so a reload shows the same item rather than silently claiming a second.
 _OPEN_ASSIGNMENT_SQL = f"""
     SELECT {_ASSIGNMENT_COLUMNS}
     FROM pick_queue q
     {_ASSIGNMENT_JOINS}
-    WHERE q.delivery_date = %(d)s
-      AND q.status        = 'assigned'
-      AND q.assigned_to   = %(picker)s
+    WHERE q.status      = 'assigned'
+      AND q.assigned_to = %(picker)s
+      AND (q.is_will_call OR q.delivery_date = %(d)s)
     ORDER BY q.assigned_at
     LIMIT 1
 """
