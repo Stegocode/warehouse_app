@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from warehouse_app.core.domain import DeliveryStop, InventoryItem, PickRow
+from warehouse_app.core.domain import DeliveryStop, InventoryItem, PickRow, ScannerPickUnit
 
 def truck_sort_key(truck_id: str, owned_trucks: frozenset[str]) -> tuple[int, str, int]:
     """Owned fleet trucks sort before third-party carriers.
@@ -83,3 +83,81 @@ def build_pick_order(
                 whse_location=item.source_whse_location,
             ))
     return rows
+
+
+# ERP status -> pick lifecycle seed. Open stock is pickable work (queued); a unit the ERP
+# already has in-transit was picked already (in_transit = done). Every other status is not
+# pickable (on_order/sold/missing/…) and the builder omits it rather than queue it.
+_ERP_STATUS_TO_PICK: dict[str, str] = {
+    "in_warehouse": "queued",
+    "in_transit":   "in_transit",
+}
+
+
+def build_scanner_pick_rows(
+    delivery_date: date,
+    units: list[ScannerPickUnit],
+    owned_trucks: frozenset[str],
+) -> tuple[list[DeliveryStop], list[PickRow]]:
+    """Pure: group scanner-resolved units into stops + ordered pick rows.
+
+    A stop is one (order, truck) — the same order split across two trucks is two stops.
+    Stops sequence within a truck by first appearance in ``units`` (the scanner's own
+    order, which is route-ish); rows sort owned-fleet-first (truck rank), then that stop
+    sequence, then piece (model, inventory id). Each row's status is seeded from the unit's
+    ERP status: open -> queued (to pick), in-transit -> in_transit (already picked). Units
+    in any other ERP status are not pickable and are dropped, never queued (Rule 4).
+    """
+    ranks = assign_truck_ranks([u.truck_id for u in units], owned_trucks)
+
+    # Group by (order, truck), remembering the order stops first appear within each truck so
+    # stop_order is deterministic and reflects the source sequence.
+    groups: dict[tuple[int, str], list[ScannerPickUnit]] = {}
+    order_seq: dict[str, list[int]] = {}
+    for u in units:
+        key = (u.order_id, u.truck_id)
+        if key not in groups:
+            groups[key] = []
+            order_seq.setdefault(u.truck_id, []).append(u.order_id)
+        groups[key].append(u)
+
+    stop_order_of: dict[tuple[int, str], int] = {}
+    for truck, order_ids in order_seq.items():
+        for idx, oid in enumerate(order_ids, start=1):
+            stop_order_of[(oid, truck)] = idx
+
+    stops: list[DeliveryStop] = []
+    rows: list[PickRow] = []
+    for (order_id, truck), group in groups.items():
+        so = stop_order_of[(order_id, truck)]
+        stop_id = f"{delivery_date.isoformat()}-{truck}-{order_id}"
+        customer = next((u.customer_name for u in group if u.customer_name), None)
+        stops.append(DeliveryStop(
+            stop_id=stop_id,
+            delivery_date=delivery_date,
+            truck_id=truck,
+            stop_order=so,
+            source_order_id=order_id,
+            customer_name=customer,
+            sink_item_id=None,
+        ))
+        piece = 0
+        for u in sorted(group, key=lambda x: (x.model_number, x.source_inventory_id)):
+            status = _ERP_STATUS_TO_PICK.get(u.erp_status)
+            if status is None:
+                continue  # not pickable in this ERP status — omit, never queue
+            piece += 1
+            rows.append(PickRow(
+                stop_id=stop_id,
+                source_inventory_id=u.source_inventory_id,
+                source_order_item_id=u.source_order_item_id,
+                delivery_date=delivery_date,
+                truck_id=truck,
+                truck_sort_order=ranks[truck],
+                stop_order=so,
+                piece_order=piece,
+                model_number=u.model_number,
+                whse_location=u.whse_location,
+                status=status,  # type: ignore[arg-type]
+            ))
+    return stops, rows

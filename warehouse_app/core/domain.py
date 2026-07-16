@@ -193,3 +193,26 @@ class PickRow:
     carton_d_in:          int | None = None
     gross_weight_lb:      int | None = None
     status:               PickStatus = "queued"
+
+
+@dataclass(frozen=True)
+class ScannerPickUnit:
+    """One physical unit to pick, already resolved from the scanner API.
+
+    Flat input to build_scanner_pick_rows: it knows its order, truck, and the unit's ERP
+    status, so the core function only has to group into stops, order pieces, and seed the
+    pick status. This is the scanner-sourced replacement for the old
+    DeliveryStop + InventoryItem pair fed to build_pick_order.
+    """
+
+    order_id:             int
+    truck_id:             str
+    model_number:         str
+    source_inventory_id:  int
+    source_order_item_id: int
+    erp_status:           ItemStatus
+    customer_name:        str | None = None
+    serial_number:        str | None = None
+    whse_location:        str | None = None
+    is_will_call:         bool = False
+    drop_point:           str | None = None
