@@ -159,30 +159,6 @@ class HttpSource:
         r.raise_for_status()
         return r.json()
 
-    def fetch_route_sheet_pdf(self, delivery_date: str) -> bytes:
-        session = self._require_session()
-        # delivery_date is ISO (YYYY-MM-DD); route sheet endpoint expects MM/DD/YYYY.
-        from datetime import date as _date
-        d = _date.fromisoformat(delivery_date)
-        date_str = d.strftime("%m/%d/%Y")
-        url = (
-            f"{self._base}/schedule/delivery/routeSheet"
-            f"?scheduleDate={date_str}&truckId=all&deliveryType="
-        )
-        resp = session.get(
-            url,
-            headers={"User-Agent": "Mozilla/5.0", "Referer": self._base + "/schedule/delivery"},
-            timeout=30,
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(f"Route sheet HTTP {resp.status_code}")
-        if len(resp.content) < 1000:
-            raise RuntimeError(
-                f"Route sheet response too small ({len(resp.content)} bytes) — "
-                "date may have no scheduled deliveries"
-            )
-        return resp.content
-
     def get_session_cookies(self) -> dict[str, str]:
         """Return current session cookies as a plain dict for use with httpx clients."""
         session = self._require_session()

@@ -19,7 +19,7 @@ Row counts are a snapshot (2026-07-15) for orientation, not a contract.
 | Table | Rows | Purpose |
 |---|---|---|
 | `pick_queue` | 96 | The pick work list — one row per piece to pick for a delivery date. Lifecycle `queued → assigned → picked → in_transit`; carries the persisted pick order (`truck_sort_order`) and will-call interrupt rows (`is_will_call`, `drop_point`). |
-| `delivery_stops` | 39 | Delivery route stops for a date — truck, stop order, customer. Built from the route sheet + board sync; keyed on `(delivery_date, source_order_id)` so a re-route keeps the same `stop_id`. |
+| `delivery_stops` | 39 | Delivery route stops for a date — truck, stop order, customer. Built from the scanner API (`build_scanner_queue`); keyed on `(delivery_date, source_order_id)` so a re-route keeps the same `stop_id`. The `sink_*` columns are vestigial (the Monday sink is retired) and now nullable. |
 | `inventory_items` | 14,658 | Serialized ERP inventory, synced from the source portal — model, serial, bin location, `source_status`, allocation. The occupancy and allocation source of truth. |
 | `model_size_catalog` | 16,376 | Model → dimensions, size tier, manufacturer, carton dims. Joined to pick rows for the pick screen and to candidate bins for putaway fit checks. |
 | `source_locations` | 7 | ERP location IDs → short names (WAREHO, OUTLET, …) and which are pickable. |

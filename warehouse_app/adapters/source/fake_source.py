@@ -22,7 +22,3 @@ class FakeSource:
     def fetch_models(self, limit: int | None = None) -> list[dict]:
         logger.info("[fake-source] fetch_models → []")
         return []
-
-    def fetch_route_sheet_pdf(self, delivery_date: str) -> bytes:
-        logger.info("[fake-source] fetch_route_sheet_pdf(%s) → empty bytes", delivery_date)
-        return b""

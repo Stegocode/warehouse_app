@@ -23,10 +23,6 @@ class SourcePort(Protocol):
         """Return raw model catalog records."""
         ...
 
-    def fetch_route_sheet_pdf(self, delivery_date: str) -> bytes:
-        """Return the route-sheet PDF for the given date (ISO format YYYY-MM-DD)."""
-        ...
-
 
 @runtime_checkable
 class ScannerWritePort(Protocol):
