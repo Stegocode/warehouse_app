@@ -262,9 +262,12 @@ _CLEAR_PQ_DATE_SQL = """
       AND status = 'queued'
 """
 
-# Rows surviving the clear are in-progress or complete. For an 'assigned' row we
-# refresh routing (the truck or stop may have moved) but never touch status,
-# assigned_to, or assigned_at — the claim stands. Anything further along is left
+# Insert status comes from the row, not a literal: the route-sheet path passes only
+# 'queued' rows (unchanged behaviour), while the scanner path also writes already-picked
+# units as 'in_transit' so they show completed rather than being re-queued. The CHECK
+# allows both (migration 0002). Rows surviving the clear are in-progress or complete: for
+# an 'assigned' row we refresh routing (the truck or stop may have moved) but never touch
+# status, assigned_to, or assigned_at — the claim stands. Anything further along is left
 # entirely alone.
 _UPSERT_PQ_SQL = """
     INSERT INTO pick_queue (
@@ -278,7 +281,7 @@ _UPSERT_PQ_SQL = """
         %(delivery_date)s, %(truck_id)s, %(truck_sort_order)s, %(stop_order)s, %(piece_order)s,
         %(model_number)s, %(whse_location)s,
         %(carton_w_in)s, %(carton_h_in)s, %(carton_d_in)s, %(gross_weight_lb)s,
-        'queued', now(), now()
+        %(status)s, now(), now()
     )
     ON CONFLICT (stop_id, source_inventory_id)
     WHERE source_inventory_id IS NOT NULL
@@ -408,6 +411,7 @@ def write_pick_queue(
                 "carton_h_in":          r.carton_h_in,
                 "carton_d_in":          r.carton_d_in,
                 "gross_weight_lb":      r.gross_weight_lb,
+                "status":               r.status,
             }
             for r in rows
         ]

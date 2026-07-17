@@ -21,6 +21,7 @@ def truck_sort_key(truck_id: str, owned_trucks: frozenset[str]) -> tuple[int, st
 def assign_truck_ranks(
     truck_ids: list[str],
     owned_trucks: frozenset[str],
+    truck_priority: dict[str, int] | None = None,
 ) -> dict[str, int]:
     """Map each truck to a dense rank (0 = picked first), using truck_sort_key.
 
@@ -35,8 +36,18 @@ def assign_truck_ranks(
     a third-party label sorts before an owned one ('ACME' before 'FLEET') or numeric
     labels of unequal length are compared ('10' before '5'). Persisting the rank makes
     the order explicit and independent of how anyone spells a truck.
+
+    ``truck_priority`` optionally layers a delivery-priority tier ABOVE the owned/label
+    order (smaller = picked earlier) — the morning-first tier (scheduled Pickup / 3rd
+    Party / Drop Ship) ranks before the delivery trucks. A truck absent from the map (and
+    the whole route-sheet path, which passes nothing) defaults to tier 0, leaving the
+    original owned-then-label order unchanged.
     """
-    distinct = sorted(set(truck_ids), key=lambda t: truck_sort_key(t, owned_trucks))
+    prio = truck_priority or {}
+    distinct = sorted(
+        set(truck_ids),
+        key=lambda t: (prio.get(t, 0),) + truck_sort_key(t, owned_trucks),
+    )
     return {truck_id: rank for rank, truck_id in enumerate(distinct)}
 
 
@@ -103,12 +114,19 @@ def build_scanner_pick_rows(
 
     A stop is one (order, truck) — the same order split across two trucks is two stops.
     Stops sequence within a truck by first appearance in ``units`` (the scanner's own
-    order, which is route-ish); rows sort owned-fleet-first (truck rank), then that stop
-    sequence, then piece (model, inventory id). Each row's status is seeded from the unit's
-    ERP status: open -> queued (to pick), in-transit -> in_transit (already picked). Units
-    in any other ERP status are not pickable and are dropped, never queued (Rule 4).
+    order, which is route-ish); rows sort morning-first tier, then owned-fleet, then that
+    stop sequence, then piece (model, inventory id). Each row's status is seeded from the
+    unit's ERP status: open -> queued (to pick), in-transit -> in_transit (already picked).
+    Units in any other ERP status are not pickable and are dropped, never queued (Rule 4).
     """
-    ranks = assign_truck_ranks([u.truck_id for u in units], owned_trucks)
+    # A truck carries one delivery type on the scheduler, so its priority tier is the tier
+    # of its units. Take the min so a truck is ranked by its highest-priority (earliest)
+    # unit if the source ever mixes them.
+    truck_priority: dict[str, int] = {}
+    for u in units:
+        cur = truck_priority.get(u.truck_id)
+        truck_priority[u.truck_id] = u.priority_group if cur is None else min(cur, u.priority_group)
+    ranks = assign_truck_ranks([u.truck_id for u in units], owned_trucks, truck_priority)
 
     # Group by (order, truck), remembering the order stops first appear within each truck so
     # stop_order is deterministic and reflects the source sequence.

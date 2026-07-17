@@ -9,6 +9,19 @@ Every deferred fix gets an entry here before it ships. Format:
 
 ## Open
 
+DEBT-PICK-001  2026-07-16  Rule 13  Scanner pick build handles UNDER-allocation (Qty >
+  allocated units → shortfall flag) but not OVER-allocation (allocated units > scheduled
+  Qty). Observed live 7/17: 136 allocated units for 131 scheduled pieces — the ERP has
+  ~11 more units allocated to some lines than the manifest schedules. The build currently
+  queues ALL allocated open units.
+  Why deferred: Scott wants to SEE it in Dolly's pick UI before deciding what is correct —
+    whether to cap pickable rows at Qty per line, or queue all allocated and flag the
+    excess. Most of the over-count is already-picked (in_transit) units that show as
+    completed, so the live impact on the to-pick list is small.
+  Fix path: once observed in Dolly, either cap queued rows at Qty per line (order the
+    allocated units and take the first Qty) or add a symmetric over-allocation flag via
+    flags_db, mirroring the shortfall flag. Decide with real UI feedback, not up front.
+
 DEBT-ROUTE-001  2026-07-14  Rule 14  The void finder returns a bin STRING (whse_location,
   e.g. "01-15-1"); the ERP receive_serial write takes a numeric WHSELocationId (e.g. 964).
   So a computed putaway bin cannot yet be fed into an actual receive without a
