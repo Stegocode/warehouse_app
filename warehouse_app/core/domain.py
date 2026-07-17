@@ -195,14 +195,24 @@ class PickRow:
     status:               PickStatus = "queued"
 
 
+# Pick-order priority tiers within the routed (non-interrupt) queue. Smaller = picked
+# earlier. The morning-first tier (scheduled Pickup / 3rd Party / Drop Ship) is a
+# will-call-category delivery that is staged before the delivery trucks roll; ordinary
+# Delivery (and Bend Transfer) is the normal tier. This is NOT the live will-call
+# interrupt (is_will_call, migration 0006) — that is office-injected, never from the
+# manifest. Folded into truck_sort_order so the claim query needs no new column.
+PRIORITY_MORNING_FIRST = 0
+PRIORITY_NORMAL = 1
+
+
 @dataclass(frozen=True)
 class ScannerPickUnit:
     """One physical unit to pick, already resolved from the scanner API.
 
-    Flat input to build_scanner_pick_rows: it knows its order, truck, and the unit's ERP
-    status, so the core function only has to group into stops, order pieces, and seed the
-    pick status. This is the scanner-sourced replacement for the old
-    DeliveryStop + InventoryItem pair fed to build_pick_order.
+    Flat input to build_scanner_pick_rows: it knows its order, truck, delivery-priority
+    tier, and the unit's ERP status, so the core function only has to group into stops,
+    order pieces, and seed the pick status. This is the scanner-sourced replacement for
+    the old DeliveryStop + InventoryItem pair fed to build_pick_order.
     """
 
     order_id:             int
@@ -214,5 +224,25 @@ class ScannerPickUnit:
     customer_name:        str | None = None
     serial_number:        str | None = None
     whse_location:        str | None = None
-    is_will_call:         bool = False
-    drop_point:           str | None = None
+    priority_group:       int = PRIORITY_NORMAL
+
+
+@dataclass(frozen=True)
+class PickShortfall:
+    """A serialized line scheduled for delivery with fewer allocated units than its Qty.
+
+    The un-allocated pieces do not appear in the scanner's allocated[] and so cannot be
+    queued, but they still must be picked. Surfaced as a flag for a management module
+    (route-gen / issues / metrics) outside the picking UI — never silently dropped.
+    """
+
+    source_order_id:      int
+    source_order_item_id: int
+    model_number:         str
+    scheduled_qty:        int
+    allocated_count:      int
+    customer_name:        str | None = None
+
+    @property
+    def missing(self) -> int:
+        return max(0, self.scheduled_qty - self.allocated_count)

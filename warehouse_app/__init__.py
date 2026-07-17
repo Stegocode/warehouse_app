@@ -16,15 +16,6 @@ def make_source(cfg: Config):
     return HttpSource(cfg)
 
 
-def make_sink(cfg: Config):
-    """Return the sink adapter matching SINK_TYPE."""
-    if cfg.sink_type == "null":
-        from warehouse_app.adapters.sink.null_sink import NullSink
-        return NullSink()
-    from warehouse_app.adapters.sink.graphql_sink import GraphqlSink
-    return GraphqlSink(cfg)
-
-
 def make_scanner_writer(cfg: Config):
     """Return the ERP scanner-write adapter matching SOURCE_TYPE.
 

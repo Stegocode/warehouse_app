@@ -103,13 +103,11 @@ when the consumer calls `config.load()` — i.e. to run the **Refresh / ERP-sync
 | `OWNED_FLEET_TRUCKS` | comma list of owned-fleet truck labels, e.g. `56,58,62,64,FLEET` (unset → refuses to start) |
 
 **Required when `SOURCE_TYPE=portal`** (the default — set `SOURCE_TYPE=fake` for offline)
-`SOURCE_USERNAME`, `SOURCE_PASSWORD`, `SOURCE_BASE_URL`
-
-**Required when `SINK_TYPE=graphql`** (the default — set `SINK_TYPE=null` to disable)
-`SINK_API_URL`, `SINK_API_TOKEN`
+`SOURCE_USERNAME`, `SOURCE_PASSWORD`, `SOURCE_BASE_URL` — the same ERP login also
+authenticates the scanner read/write API.
 
 **Optional**
-`SOURCE_TYPE`, `SINK_TYPE`, `SINK_BOARD_ID`, `SINK_DELIVERY_COL`, `DIM_FEED_URL_TEMPLATE`,
-`LAYOUT_JSON_PATH`, `SOURCE_DIM_CONCURRENCY` (default `12`).
+`SOURCE_TYPE`, `DIM_FEED_URL_TEMPLATE`, `LAYOUT_JSON_PATH`, `SOURCE_DIM_CONCURRENCY`
+(default `12`).
 
 Credentials belong in Render env vars / the deployment's `.env`, never committed.

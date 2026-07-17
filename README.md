@@ -11,11 +11,11 @@ Hexagonal — dependencies point **inward only**:
 
 ```
 core/       pure domain logic — pick order, void finder, scan verification,
-            classification, dimensions, domain types. No I/O, no framework.
-services/   orchestration — pick_claim, inventory_sync, stop_sync,
-            pick_queue_builder, putaway, will_call, model/dim sync.
+            classification, dimensions, delivery calendar, domain types. No I/O.
+services/   orchestration — pick_claim, inventory_sync, scanner_pick_builder,
+            putaway, will_call, model/dim sync.
 adapters/   the edges — db (Neon via psycopg), source (the upstream ERP:
-            HTTP reads + the scanner-write API), sink (the delivery board).
+            HTTP reads + the scanner read/write API).
 ```
 
 The core never imports outward; every consumer passes I/O in. Direction is enforced
@@ -26,8 +26,9 @@ mechanically by `gate.py`, not by convention.
 - **Pick serving** — atomic `claim → confirm → release`, `progress`, with `FOR UPDATE SKIP
   LOCKED` so several pickers share one list without collisions, and will-call interrupts
   that jump the queue. (`services/pick_claim`)
-- **Pick queue build** — route sheet + board → `delivery_stops` → `pick_queue`, in
-  owned-fleet-first order that survives the round-trip to SQL.
+- **Pick queue build** — the ERP scanner API's day manifest → `delivery_stops` → `pick_queue`,
+  tiered morning-first then owned-fleet-first, in an order that survives the round-trip to
+  SQL. Scheduled-but-unallocated pieces are flagged, not dropped. (`services/scanner_pick_builder`)
 - **Inventory & catalog sync** — the upstream ERP's serialized inventory and model
   dimensions into Neon.
 - **Routing** — a putaway void finder: the open bin closest to the next pick by real travel
@@ -49,11 +50,14 @@ pick-serving path needs only a database connection — no other config.
 ## Command-line sync
 
 ```
-python -m warehouse_app.scripts.sync_inventory       --env-file <path>
-python -m warehouse_app.scripts.sync_delivery_stops  --env-file <path> --date YYYY-MM-DD
-python -m warehouse_app.scripts.build_pick_queue      --env-file <path> --date YYYY-MM-DD
+python -m warehouse_app.scripts.sync_inventory        --env-file <path>
+python -m warehouse_app.scripts.build_scanner_queue   --env-file <path> [--date YYYY-MM-DD]
 python -m warehouse_app.scripts.migrate               --env-file <path>
 ```
+
+`build_scanner_queue` refreshes inventory then builds the pick queue from the scanner API in
+one pass (stops + queue + shortfall flags). With no `--date` it targets the next delivery day,
+skipping weekends. `--dry-run` reports counts without writing.
 
 ## Configuration
 
