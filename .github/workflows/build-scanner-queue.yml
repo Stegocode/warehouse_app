@@ -1,0 +1,67 @@
+name: Nightly pick-queue build
+
+# Rebuilds the next delivery day's pick queue from the ERP scanner API so the queue is
+# ready without anyone running the CLI by hand. Runs inventory-sync -> scanner build, then
+# persists to Neon. The build is idempotent, so a rerun is always safe.
+#
+# A RED run means the queue did NOT rebuild for that day — GitHub emails the workflow's
+# committer on a scheduled failure (repo Settings -> Notifications). Treat it as an alert.
+
+on:
+  # GitHub cron is UTC and does NOT observe DST. We fire mid-afternoon Pacific so that:
+  #   (a) it lands AFTER the ~2 PM day-before truck-fluidity cutoff, and
+  #   (b) the runner's UTC calendar date still equals the Pacific date, which
+  #       core.delivery_schedule.next_delivery_day relies on to target the right day
+  #       (an evening-Pacific run would roll over to the next UTC date and skip a day).
+  # 23:00 UTC is 3 PM PST (4 PM PDT) — after the ~2 PM day-before truck-fluidity cutoff, so
+  # the routes have settled. Days Sun-Thu (0-4) build Mon-Fri; weekends have no deliveries,
+  # so next_delivery_day skips them anyway. GitHub cron is fixed UTC and ignores DST, so the
+  # Pacific clock-time drifts +1h in summer (4 PM PDT) — still comfortably past the cutoff.
+  schedule:
+    - cron: "0 23 * * 0-4"
+
+  # Manual trigger for testing and ad-hoc rebuilds. dry_run reports counts and writes nothing.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and report counts, write nothing"
+        type: boolean
+        default: false
+
+# One build writes a given date at a time. The build is idempotent so a queued rerun is
+# safe; we do not cancel an in-flight write.
+concurrency:
+  group: scanner-queue-build
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build the scanner pick queue
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Build pick queue
+        # The CLI reads config from the ambient environment (no --env-file). The default
+        # date is core.delivery_schedule.next_delivery_day, which skips weekends.
+        run: >-
+          python -m warehouse_app.scripts.build_scanner_queue
+          ${{ inputs.dry_run && '--dry-run' || '' }}
+        env:
+          DATABASE_URL:       ${{ secrets.DATABASE_URL }}
+          SOURCE_BASE_URL:    ${{ secrets.SOURCE_BASE_URL }}
+          SOURCE_USERNAME:    ${{ secrets.SOURCE_USERNAME }}
+          SOURCE_PASSWORD:    ${{ secrets.SOURCE_PASSWORD }}
+          OWNED_FLEET_TRUCKS: ${{ secrets.OWNED_FLEET_TRUCKS }}
