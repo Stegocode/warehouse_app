@@ -1,7 +1,13 @@
 # ADR-0001: Hexagonal (Ports & Adapters) Architecture
 
-**Status:** Accepted  
+**Status:** Accepted — **superseded in part by [ADR-0002](ADR-0002-retire-sink-scanner-source.md) (2026-07)**  
 **Date:** 2026-07-10
+
+> **Superseded in part (2026-07).** The `sink/` port (`SinkPort`, `make_sink`, `null_sink`,
+> `graphql_sink`) and the `SINK_*` config described below were **retired** when the pick path
+> moved to the ERP scanner API — see ADR-0002. The three-layer hexagonal shape and the
+> inward-only dependency rule still hold; the system is now **source-only** (there is no sink).
+> Read the sink references below as historical.
 
 ## Context
 
